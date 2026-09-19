@@ -1,0 +1,35 @@
+# ==========================================
+# SDR Buildathon - Requirements
+# ==========================================
+
+# Core API & Server
+fastapi
+python-multipart
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-dotenv
+passlib
+bcrypt
+
+# Database & Async ORM
+sqlalchemy
+asyncpg
+pgvector
+greenlet
+
+# Agent Orchestration & LLMs
+langgraph
+langchain-core
+langchain-openai
+litellm
+openai
+
+# Channel Integrations & Network
+twilio
+resend
+httpx
+
+# Data Manipulation & Fallbacks
+numpy
+faker
