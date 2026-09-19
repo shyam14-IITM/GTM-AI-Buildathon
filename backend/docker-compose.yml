@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  db:
+    # We use this specific image because your schema requires the pgvector extension for RAG!
+    image: pgvector/pgvector:pg16
+    container_name: buildathon_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: buildathon
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

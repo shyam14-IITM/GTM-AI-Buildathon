@@ -7,6 +7,8 @@ class AgentState(TypedDict):
     The core state object for the SDR LangGraph orchestration.
     This dictionary is passed from node to node as the agents execute the pipeline.
     """
+    # Core Identifiers
+    campaign_id: str
     prospect_id: str
     
     # Target criteria pulled from the Campaign's JSON config

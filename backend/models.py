@@ -22,6 +22,7 @@ class ProspectStage(str, enum.Enum):
     DISCOVERED = "Discovered"
     RESEARCHED = "Researched"
     QUALIFIED = "Qualified"
+    DRAFTED = "Drafted"
     CONTACTED = "Contacted"
     ENGAGED = "Engaged"
     MEETING = "Meeting"
@@ -72,7 +73,7 @@ class Campaign(Base):
     # Relationships
     user = relationship("User", back_populates="campaigns")
     prospects = relationship("Prospect", back_populates="campaign", cascade="all, delete-orphan")
-    outreach_logs = relationship("OutreachLog", back_populates="campaign", cascade="all, delete-orphan")
+    agent_logs = relationship("AgentLog", back_populates="campaign", cascade="all, delete-orphan")
     prompt_versions = relationship("PromptVersion", back_populates="campaign", cascade="all, delete-orphan")
     knowledge_documents = relationship("KnowledgeDocument", back_populates="campaign", cascade="all, delete-orphan")
 
@@ -101,12 +102,15 @@ class Prospect(Base):
     # A boolean lock to designate if this prospect is actively being targeted
     is_active_target = Column(Boolean, default=True, nullable=False)
     
+    # Store the generated draft outreach message
+    draft_email = Column(String, nullable=True)
+    
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
     # Relationships
     campaign = relationship("Campaign", back_populates="prospects")
-    outreach_logs = relationship("OutreachLog", back_populates="prospect", cascade="all, delete-orphan")
+    agent_logs = relationship("AgentLog", back_populates="prospect", cascade="all, delete-orphan")
 
     __table_args__ = (
         # Prevent cross-campaign collision: An email or linkedin can only be actively targeted once across the system.
@@ -119,39 +123,39 @@ class Prospect(Base):
         Index("ix_prospects_campaign_id", "campaign_id"),
     )
 
-class OutreachLog(Base):
+class AgentLog(Base):
     """
     Audit trail of all agent actions linked to a prospect and a campaign.
+    Designed for chronological fetching by the DronaHQ Control Plane UI.
     """
-    __tablename__ = "outreach_logs"
+    __tablename__ = "agent_logs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    prospect_id = Column(UUID(as_uuid=True), ForeignKey("prospects.id", ondelete="CASCADE"), nullable=False)
     campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False)
+    prospect_id = Column(UUID(as_uuid=True), ForeignKey("prospects.id", ondelete="CASCADE"), nullable=False)
     
-    # Track which prompt was active when this action was generated
-    prompt_version_id = Column(UUID(as_uuid=True), ForeignKey("prompt_versions.id", ondelete="SET NULL"), nullable=True)
+    # Name of the agent node performing the action
+    agent_name = Column(String, nullable=False)
     
-    # E.g., 'email_sent', 'linkedin_connected', 'qualification_failed'
-    action_type = Column(String, nullable=False)
+    # E.g., 'ENRICHED', 'EVALUATED_FIT', 'DRAFTED_EMAIL'
+    action = Column(String, nullable=False)
     
-    # Store the actual text drafted or notes from an agent
-    content = Column(String, nullable=True)
+    # E.g., 'SUCCESS', 'FAILED'
+    status = Column(String, nullable=False)
     
-    # Store unstructured metadata (e.g., API response from Resend/Twilio)
-    metadata_ = Column("metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    # Detailed reasoning, summary, or payload
+    details = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     
-    timestamp = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     # Relationships
-    prospect = relationship("Prospect", back_populates="outreach_logs")
-    campaign = relationship("Campaign", back_populates="outreach_logs")
-    prompt_version = relationship("PromptVersion")
+    prospect = relationship("Prospect", back_populates="agent_logs")
+    campaign = relationship("Campaign", back_populates="agent_logs")
 
     __table_args__ = (
-        Index("ix_outreach_logs_prospect_id", "prospect_id"),
-        Index("ix_outreach_logs_campaign_id", "campaign_id"),
-        Index("ix_outreach_logs_timestamp", "timestamp"),
+        Index("ix_agent_logs_campaign_id", "campaign_id"),
+        Index("ix_agent_logs_prospect_id", "prospect_id"),
+        Index("ix_agent_logs_created_at", "created_at"),
     )
 
 class PromptVersion(Base):

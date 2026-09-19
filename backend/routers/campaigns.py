@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from database import get_db, AsyncSessionLocal
-from models import Campaign, User, Prospect
+from models import Campaign, User, Prospect, AgentLog
 from schemas import CampaignCreate, CampaignUpdate, CampaignResponse
 from auth import get_current_user
 from graph.workflow import compiled_workflow
@@ -83,6 +83,40 @@ async def update_campaign(
     await db.refresh(campaign)
     return campaign
 
+@router.get("/{campaign_id}/logs")
+async def get_campaign_logs(
+    campaign_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Fetch chronological AgentLog entries for a campaign. 
+    Designed for easy binding in DronaHQ list/table components.
+    """
+    # Verify access
+    result = await db.execute(
+        select(Campaign).where(Campaign.id == campaign_id, Campaign.user_id == current_user.id)
+    )
+    if not result.scalars().first():
+        raise HTTPException(status_code=404, detail="Campaign not found")
+        
+    result = await db.execute(
+        select(AgentLog).where(AgentLog.campaign_id == campaign_id).order_by(AgentLog.created_at.desc())
+    )
+    logs = result.scalars().all()
+    
+    return [
+        {
+            "id": log.id,
+            "prospect_id": log.prospect_id,
+            "agent_name": log.agent_name,
+            "action": log.action,
+            "status": log.status,
+            "details": log.details,
+            "created_at": log.created_at
+        } for log in logs
+    ]
+
 async def run_campaign_agents_background(campaign_id: uuid.UUID, user_id: uuid.UUID):
     """
     Background worker that runs the LangGraph orchestration.
@@ -108,6 +142,7 @@ async def run_campaign_agents_background(campaign_id: uuid.UUID, user_id: uuid.U
 
         # Pass real data to the graph
         initial_state = {
+            "campaign_id": str(campaign_id),
             "prospect_id": str(prospect.id),
             "icp_criteria": campaign.targeting_criteria,
             "structured_prospect_data": {},

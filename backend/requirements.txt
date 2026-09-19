@@ -23,7 +23,6 @@ langgraph
 langchain-core
 langchain-openai
 langchain-google-genai
-litellm
 openai
 
 # Channel Integrations & Network
