@@ -5,10 +5,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from database import get_db, AsyncSessionLocal
-from models import Campaign, CampaignStatus, User, Prospect, ProspectStage, AgentLog
-from schemas import CampaignCreate, CampaignUpdate, CampaignResponse, AgentLogResponse, FunnelMetricsResponse
+from models import Campaign, CampaignStatus, User, Prospect, ProspectStage, AgentLog, KnowledgeDocument
+from schemas import CampaignCreate, CampaignUpdate, CampaignResponse, AgentLogResponse, FunnelMetricsResponse, KnowledgeUpload
 from auth import get_current_user
 from graph.workflow import compiled_workflow
+from sqlalchemy import func
+import asyncio
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+# Initialize local HuggingFace embeddings
+embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 from sqlalchemy import func
 import asyncio
 
@@ -153,6 +160,42 @@ async def get_campaign_metrics(
             setattr(metrics, field_name, count)
             
     return metrics
+
+@router.post("/{campaign_id}/knowledge", status_code=status.HTTP_201_CREATED)
+async def seed_knowledge(
+    campaign_id: uuid.UUID,
+    upload: KnowledgeUpload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Chunk and embed knowledge into pgvector."""
+    result = await db.execute(select(Campaign).where(Campaign.id == campaign_id, Campaign.user_id == current_user.id))
+    campaign = result.scalars().first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+        
+    # Split text
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    chunks = splitter.split_text(upload.content)
+    
+    if not chunks:
+        return {"message": "No content to embed"}
+        
+    # Embed chunks
+    vectors = embeddings.embed_documents(chunks)
+    
+    # Save to db
+    for chunk, vector in zip(chunks, vectors):
+        doc = KnowledgeDocument(
+            campaign_id=campaign_id,
+            title=upload.title,
+            content=chunk,
+            embedding=vector
+        )
+        db.add(doc)
+        
+    await db.commit()
+    return {"message": f"Successfully embedded {len(chunks)} knowledge chunks"}
 
 @router.post("/{campaign_id}/seed")
 async def seed_campaign_prospects(

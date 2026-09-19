@@ -24,6 +24,9 @@ langchain-core
 langchain-openai
 langchain-google-genai
 openai
+sentence-transformers
+langchain-huggingface
+langchain-text-splitters
 
 # Channel Integrations & Network
 twilio

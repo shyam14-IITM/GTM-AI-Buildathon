@@ -2,11 +2,15 @@ from typing import Any, Literal
 from pydantic import BaseModel
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
+from langchain_huggingface import HuggingFaceEmbeddings
 from sqlalchemy.future import select
 
 from .state import AgentState
 from database import AsyncSessionLocal
-from models import Prospect, ProspectStage, AgentLog
+from models import Prospect, ProspectStage, AgentLog, KnowledgeDocument
+
+# Initialize global embeddings for nodes
+embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 class ICPDecision(BaseModel):
     status: Literal['Qualified', 'Rejected']
@@ -156,6 +160,22 @@ async def email_drafter_node(state: AgentState) -> dict[str, Any]:
     # but for now we'll pass a general directive based on ICP criteria
     icp_criteria = state.get("icp_criteria", {})
     
+    # RAG Retrieval: Fetch the most relevant knowledge documents
+    knowledge_context = "No specific knowledge base available."
+    query = f"Industry: {structured_data.get('industry', '')} Role: {structured_data.get('title', '')}"
+    query_vector = embeddings.embed_query(query)
+    
+    async with AsyncSessionLocal() as db:
+        results = await db.execute(
+            select(KnowledgeDocument)
+            .where(KnowledgeDocument.campaign_id == campaign_id)
+            .order_by(KnowledgeDocument.embedding.cosine_distance(query_vector))
+            .limit(2)
+        )
+        knowledge_docs = results.scalars().all()
+        if knowledge_docs:
+            knowledge_context = "\n\n".join([doc.content for doc in knowledge_docs])
+    
     system_prompt = SystemMessage(content="""
     You are an elite B2B SDR. Draft a highly personalized cold email for the given prospect.
     Your email must be concise, engaging, and highlight a clear value proposition related to their industry/role.
@@ -164,6 +184,9 @@ async def email_drafter_node(state: AgentState) -> dict[str, Any]:
     
     user_prompt = HumanMessage(content=f"""
     Target Audience/Campaign Context: {icp_criteria}
+    Campaign Knowledge Base (Use this for context/case studies):
+    {knowledge_context}
+    
     Prospect Profile: {structured_data}
     """)
     

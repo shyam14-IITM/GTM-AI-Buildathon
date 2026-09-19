@@ -200,8 +200,8 @@ class KnowledgeDocument(Base):
     content = Column(String, nullable=False)
     
     # Store vector embeddings for pgvector
-    # 1536 is the dimension for standard OpenAI text-embedding-ada-002 model
-    embedding = Column(Vector(1536))
+    # 384 is the dimension for the standard free HuggingFace all-MiniLM-L6-v2 model
+    embedding = Column(Vector(384))
     
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
 

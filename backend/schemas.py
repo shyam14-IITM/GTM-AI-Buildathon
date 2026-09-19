@@ -62,3 +62,7 @@ class AgentLogResponse(BaseModel):
     created_at: datetime
     
     model_config = ConfigDict(from_attributes=True)
+
+class KnowledgeUpload(BaseModel):
+    title: str
+    content: str
