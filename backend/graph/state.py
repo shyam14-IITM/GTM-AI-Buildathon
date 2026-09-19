@@ -20,6 +20,9 @@ class AgentState(TypedDict):
     # The current funnel decision made by the agents (e.g., Qualified, Rejected)
     current_status: str
     
+    # Store dynamic channel routing decision ('email' or 'linkedin')
+    selected_channel: str
+    
     # Standard LangGraph message history for LLM interactions.
     # The `operator.add` reducer appends new messages to the existing list.
     messages: Annotated[List[AnyMessage], operator.add]

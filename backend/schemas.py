@@ -34,6 +34,8 @@ class ProspectResponse(BaseModel):
     linkedin_url: Optional[str] = None
     stage: ProspectStage
     is_active_target: bool
+    draft_email: Optional[str] = None
+    draft_linkedin_msg: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     
@@ -44,6 +46,7 @@ class FunnelMetricsResponse(BaseModel):
     researched: int = 0
     qualified: int = 0
     drafted: int = 0
+    drafted_linkedin: int = 0
     contacted: int = 0
     engaged: int = 0
     meeting: int = 0

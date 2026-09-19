@@ -23,6 +23,7 @@ class ProspectStage(str, enum.Enum):
     RESEARCHED = "Researched"
     QUALIFIED = "Qualified"
     DRAFTED = "Drafted"
+    DRAFTED_LINKEDIN = "Drafted_Linkedin"
     CONTACTED = "Contacted"
     ENGAGED = "Engaged"
     MEETING = "Meeting"
@@ -104,6 +105,7 @@ class Prospect(Base):
     
     # Store the generated draft outreach message
     draft_email = Column(String, nullable=True)
+    draft_linkedin_msg = Column(String, nullable=True)
     
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
