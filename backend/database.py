@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 
+# Actually load the .env file into the environment!
 load_dotenv()
 
 # Use environment variable for the database URL, with a fallback for local development.

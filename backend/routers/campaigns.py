@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from database import get_db
-from models import Campaign, User
+from database import get_db, AsyncSessionLocal
+from models import Campaign, User, Prospect
 from schemas import CampaignCreate, CampaignUpdate, CampaignResponse
 from auth import get_current_user
 from graph.workflow import compiled_workflow
@@ -86,22 +86,37 @@ async def update_campaign(
 async def run_campaign_agents_background(campaign_id: uuid.UUID, user_id: uuid.UUID):
     """
     Background worker that runs the LangGraph orchestration.
-    In a real app, this would query the prospects for the campaign and iterate over them.
-    For now, we just invoke the graph once with a dummy prospect to test the edges.
+    It fetches a real prospect from the database to test the flow.
     """
     print(f"\\n--- [Background Task] Starting execution for Campaign {campaign_id} ---")
     
-    # We pass the initial state to the graph
-    initial_state = {
-        "prospect_id": "test-prospect-123",
-        "icp_criteria": {"industry": "Software", "min_revenue": "1M"},
-        "structured_prospect_data": {},
-        "current_status": "Discovered",
-        "messages": []
-    }
-    
-    # Execute the graph
-    final_state = compiled_workflow.invoke(initial_state)
+    async with AsyncSessionLocal() as db:
+        # Fetch the campaign to get icp_criteria
+        result = await db.execute(select(Campaign).where(Campaign.id == campaign_id))
+        campaign = result.scalars().first()
+        if not campaign:
+            print("Campaign not found.")
+            return
+            
+        # Fetch ONE real prospect to test
+        result = await db.execute(select(Prospect).where(Prospect.campaign_id == campaign_id))
+        prospect = result.scalars().first()
+        
+        if not prospect:
+            print("No prospects found for this campaign to execute.")
+            return
+
+        # Pass real data to the graph
+        initial_state = {
+            "prospect_id": str(prospect.id),
+            "icp_criteria": campaign.targeting_criteria,
+            "structured_prospect_data": {},
+            "current_status": prospect.stage.value,
+            "messages": []
+        }
+        
+    # Execute the graph asynchronously (ainvoke) because nodes are async
+    final_state = await compiled_workflow.ainvoke(initial_state)
     
     print("--- [Background Task] Graph execution finished! ---")
     print("Final Status:", final_state.get("current_status"), "\\n")
