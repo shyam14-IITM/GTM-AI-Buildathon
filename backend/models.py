@@ -1,0 +1,218 @@
+import enum
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import (
+    Column, Integer, String, Boolean, ForeignKey, 
+    DateTime, Enum, Index, text
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import relationship
+from pgvector.sqlalchemy import Vector
+
+from database import Base
+
+class CampaignStatus(str, enum.Enum):
+    DRAFT = "Draft"
+    LIVE = "Live"
+    PAUSED = "Paused"
+    COMPLETED = "Completed"
+
+class ProspectStage(str, enum.Enum):
+    DISCOVERED = "Discovered"
+    RESEARCHED = "Researched"
+    QUALIFIED = "Qualified"
+    CONTACTED = "Contacted"
+    ENGAGED = "Engaged"
+    MEETING = "Meeting"
+    OPPORTUNITY = "Opportunity"
+    REJECTED = "Rejected"
+
+def utc_now():
+    return datetime.now(timezone.utc)
+
+class User(Base):
+    """
+    Represents a human manager in the system with login credentials.
+    """
+    __tablename__ = "users"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    # Relationships
+    campaigns = relationship("Campaign", back_populates="user")
+
+class Campaign(Base):
+    """
+    Represents an outreach campaign with specific targeting and configuration.
+    """
+    __tablename__ = "campaigns"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String, nullable=False)
+    status = Column(Enum(CampaignStatus), default=CampaignStatus.DRAFT, nullable=False)
+    
+    # Stores configuration like daily limits, channels to use, and assigned rep details
+    # E.g., {"assigned_rep": {"name": "Alex", "email": "alex@co.com", "daily_limit": 50, "timezone": "EST"}}
+    config = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    # Stores targeting rules for the ICP fitment phase
+    targeting_criteria = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="campaigns")
+    prospects = relationship("Prospect", back_populates="campaign", cascade="all, delete-orphan")
+    outreach_logs = relationship("OutreachLog", back_populates="campaign", cascade="all, delete-orphan")
+    prompt_versions = relationship("PromptVersion", back_populates="campaign", cascade="all, delete-orphan")
+    knowledge_documents = relationship("KnowledgeDocument", back_populates="campaign", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        # Index on status since we'll frequently query for LIVE campaigns
+        Index("ix_campaigns_status", "status"),
+    )
+
+class Prospect(Base):
+    """
+    Represents a lead/prospect moving through the outreach funnel.
+    """
+    __tablename__ = "prospects"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False)
+    
+    email = Column(String, nullable=True)
+    linkedin_url = Column(String, nullable=True)
+    
+    stage = Column(Enum(ProspectStage), default=ProspectStage.DISCOVERED, nullable=False)
+    
+    # Stores raw data from discovery APIs and enriched data during Research phase
+    enriched_data = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    
+    # A boolean lock to designate if this prospect is actively being targeted
+    is_active_target = Column(Boolean, default=True, nullable=False)
+    
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    # Relationships
+    campaign = relationship("Campaign", back_populates="prospects")
+    outreach_logs = relationship("OutreachLog", back_populates="prospect", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        # Prevent cross-campaign collision: An email or linkedin can only be actively targeted once across the system.
+        # This solves the requirement: "ensure a prospect email/LinkedIn isn't actively targeted by two live campaigns simultaneously"
+        Index("ix_prospects_unique_active_email", "email", unique=True, postgresql_where=(is_active_target.is_(True))),
+        Index("ix_prospects_unique_active_linkedin", "linkedin_url", unique=True, postgresql_where=(is_active_target.is_(True))),
+        
+        # Optimize filtering by stage and campaign
+        Index("ix_prospects_stage", "stage"),
+        Index("ix_prospects_campaign_id", "campaign_id"),
+    )
+
+class OutreachLog(Base):
+    """
+    Audit trail of all agent actions linked to a prospect and a campaign.
+    """
+    __tablename__ = "outreach_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    prospect_id = Column(UUID(as_uuid=True), ForeignKey("prospects.id", ondelete="CASCADE"), nullable=False)
+    campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False)
+    
+    # Track which prompt was active when this action was generated
+    prompt_version_id = Column(UUID(as_uuid=True), ForeignKey("prompt_versions.id", ondelete="SET NULL"), nullable=True)
+    
+    # E.g., 'email_sent', 'linkedin_connected', 'qualification_failed'
+    action_type = Column(String, nullable=False)
+    
+    # Store the actual text drafted or notes from an agent
+    content = Column(String, nullable=True)
+    
+    # Store unstructured metadata (e.g., API response from Resend/Twilio)
+    metadata_ = Column("metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    
+    timestamp = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    # Relationships
+    prospect = relationship("Prospect", back_populates="outreach_logs")
+    campaign = relationship("Campaign", back_populates="outreach_logs")
+    prompt_version = relationship("PromptVersion")
+
+    __table_args__ = (
+        Index("ix_outreach_logs_prospect_id", "prospect_id"),
+        Index("ix_outreach_logs_campaign_id", "campaign_id"),
+        Index("ix_outreach_logs_timestamp", "timestamp"),
+    )
+
+class PromptVersion(Base):
+    """
+    Tracks iterations of generative AI prompts per campaign to allow rapid A/B testing and rollbacks.
+    """
+    __tablename__ = "prompt_versions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False)
+    
+    # E.g., 'icp_fitment', 'personalization', 'conversation_handler'
+    agent_type = Column(String, nullable=False) 
+    
+    version_number = Column(Integer, nullable=False)
+    prompt_text = Column(String, nullable=False)
+    is_active = Column(Boolean, default=False, nullable=False)
+    
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    # Relationships
+    campaign = relationship("Campaign", back_populates="prompt_versions")
+
+    __table_args__ = (
+        # Ensure only one active prompt per AGENT TYPE within a campaign
+        Index("ix_prompt_versions_active_per_campaign_agent", "campaign_id", "agent_type", unique=True, postgresql_where=(is_active.is_(True))),
+    )
+
+class KnowledgeDocument(Base):
+    """
+    Documents or case studies converted into embeddings for isolated campaign RAG.
+    """
+    __tablename__ = "knowledge_documents"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False)
+    
+    title = Column(String, nullable=False)
+    content = Column(String, nullable=False)
+    
+    # Store vector embeddings for pgvector
+    # 1536 is the dimension for standard OpenAI text-embedding-ada-002 model
+    embedding = Column(Vector(1536))
+    
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    # Relationships
+    campaign = relationship("Campaign", back_populates="knowledge_documents")
+
+    __table_args__ = (
+        Index("ix_knowledge_documents_campaign_id", "campaign_id"),
+    )
+
+class GlobalSuppression(Base):
+    """
+    Do-not-contact list. Agents must check this table before sending any outreach.
+    """
+    __tablename__ = "global_suppression"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String, unique=True, nullable=True, index=True)
+    linkedin_url = Column(String, unique=True, nullable=True, index=True)
+    reason = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
