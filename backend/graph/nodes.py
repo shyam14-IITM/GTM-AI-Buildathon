@@ -1,7 +1,7 @@
 from typing import Any, Literal
 from pydantic import BaseModel
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from sqlalchemy.future import select
 
 from .state import AgentState
@@ -22,19 +22,27 @@ async def research_node(state: AgentState) -> dict[str, Any]:
     campaign_id = state.get('campaign_id')
     print(f"--- [Node: Research] Extracting data for Prospect ID: {prospect_id} ---")
     
-    # 1. Format a realistic synthetic JSON profile
-    mock_structured_data = {
-        "name": "Jane Doe",
-        "title": "CTO",
-        "company_size": "200-500",
-        "industry": "B2B SaaS"
-    }
-    
-    # 2. Update the Database using SQLAlchemy
+    # 1. Update the Database using SQLAlchemy to get the real email
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Prospect).where(Prospect.id == prospect_id))
         prospect = result.scalars().first()
+        
         if prospect:
+            # Parse the name from the email (e.g., john.doe@example.com -> John Doe)
+            email = prospect.email or ""
+            name_part = email.split('@')[0]
+            prospect_name = name_part.replace('.', ' ').title() if name_part else "Jane Doe"
+            
+            # Format a realistic synthetic JSON profile
+            mock_structured_data = {
+                "name": prospect_name,
+                "title": "CTO",
+                "company_size": "200-500",
+                "industry": "B2B SaaS",
+                "geography": "United States",
+                "recent_news": "Recently raised Series B funding"
+            }
+            
             prospect.stage = ProspectStage.RESEARCHED
             prospect.enriched_data = mock_structured_data
             
@@ -45,6 +53,7 @@ async def research_node(state: AgentState) -> dict[str, Any]:
                 agent_name="Research Node",
                 action="ENRICHED",
                 status="SUCCESS",
+                prompt_version="v1.0",
                 details={"structured_data": mock_structured_data}
             ))
             
@@ -74,13 +83,34 @@ async def icp_fitment_node(state: AgentState) -> dict[str, Any]:
     Prospect Data: {structured_data}
     """)
     
-    # Instantiate Gemini 3.6 Flash and bind structured output
-    llm = ChatGoogleGenerativeAI(model="gemini-3.6-flash", temperature=0)
-    structured_llm = llm.with_structured_output(ICPDecision)
+    import os
+    
+    # Instantiate Groq (OpenAI compatible) and bind structured output
+    llm = ChatOpenAI(
+        model="openai/gpt-oss-20b",
+        api_key=os.getenv("GROQ_API_KEY", "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"),
+        base_url="https://api.groq.com/openai/v1",
+        temperature=0
+    )
+    structured_llm = llm.with_structured_output(ICPDecision, include_raw=True)
     
     # Invoke asynchronously
-    decision: ICPDecision = await structured_llm.ainvoke([system_prompt, user_prompt])
+    response = await structured_llm.ainvoke([system_prompt, user_prompt])
+    decision: ICPDecision = response["parsed"]
+    raw_msg = response["raw"]
+    
+    usage = raw_msg.usage_metadata or {}
     print(f"LLM Decision: {decision.status} - {decision.reasoning}")
+    
+    # Prepare details payload with meta
+    details = {"status": decision.status, "reasoning": decision.reasoning}
+    if usage:
+        details["meta"] = {
+            "model": "openai/gpt-oss-20b (Groq)",
+            "prompt_tokens": usage.get("input_tokens", 0),
+            "completion_tokens": usage.get("output_tokens", 0),
+            "total_tokens": usage.get("total_tokens", 0)
+        }
     
     # Update the Database using SQLAlchemy
     async with AsyncSessionLocal() as db:
@@ -96,7 +126,8 @@ async def icp_fitment_node(state: AgentState) -> dict[str, Any]:
                 agent_name="ICP Fitment Node",
                 action="EVALUATED_FIT",
                 status="SUCCESS",
-                details={"status": decision.status, "reasoning": decision.reasoning}
+                prompt_version="v1.0",
+                details=details
             ))
             
             await db.commit()
@@ -136,13 +167,33 @@ async def email_drafter_node(state: AgentState) -> dict[str, Any]:
     Prospect Profile: {structured_data}
     """)
     
-    llm = ChatGoogleGenerativeAI(model="gemini-3.6-flash", temperature=0.4)
-    structured_llm = llm.with_structured_output(EmailDraftResponse)
+    import os
     
-    draft: EmailDraftResponse = await structured_llm.ainvoke([system_prompt, user_prompt])
+    llm = ChatOpenAI(
+        model="openai/gpt-oss-20b",
+        api_key=os.getenv("GROQ_API_KEY", "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"),
+        base_url="https://api.groq.com/openai/v1",
+        temperature=0.4
+    )
+    structured_llm = llm.with_structured_output(EmailDraftResponse, include_raw=True)
+    
+    response = await structured_llm.ainvoke([system_prompt, user_prompt])
+    draft: EmailDraftResponse = response["parsed"]
+    raw_msg = response["raw"]
+    
+    usage = raw_msg.usage_metadata or {}
     
     final_email_text = f"Subject: {draft.subject}\n\n{draft.body}"
     print(f"Drafted Email:\n{final_email_text}")
+    
+    details = {"subject": draft.subject, "body_preview": draft.body[:100] + "..."}
+    if usage:
+        details["meta"] = {
+            "model": "openai/gpt-oss-20b (Groq)",
+            "prompt_tokens": usage.get("input_tokens", 0),
+            "completion_tokens": usage.get("output_tokens", 0),
+            "total_tokens": usage.get("total_tokens", 0)
+        }
     
     # Update the Database
     async with AsyncSessionLocal() as db:
@@ -158,7 +209,8 @@ async def email_drafter_node(state: AgentState) -> dict[str, Any]:
                 agent_name="Email Personalization Node",
                 action="DRAFTED_EMAIL",
                 status="SUCCESS",
-                details={"subject": draft.subject, "body_preview": draft.body[:100] + "..."}
+                prompt_version="v1.0",
+                details=details
             ))
             
             await db.commit()

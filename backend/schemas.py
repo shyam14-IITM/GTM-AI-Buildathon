@@ -43,8 +43,22 @@ class FunnelMetricsResponse(BaseModel):
     discovered: int = 0
     researched: int = 0
     qualified: int = 0
+    drafted: int = 0
     contacted: int = 0
     engaged: int = 0
     meeting: int = 0
     opportunity: int = 0
     rejected: int = 0
+
+class AgentLogResponse(BaseModel):
+    id: UUID
+    campaign_id: UUID
+    prospect_id: UUID
+    agent_name: str
+    action: str
+    status: str
+    prompt_version: str
+    details: Dict[str, Any]
+    created_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)

@@ -134,6 +134,9 @@ class AgentLog(Base):
     campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False)
     prospect_id = Column(UUID(as_uuid=True), ForeignKey("prospects.id", ondelete="CASCADE"), nullable=False)
     
+    # Auditability: Track which prompt version produced this outcome
+    prompt_version = Column(String, nullable=False, default="v1.0")
+    
     # Name of the agent node performing the action
     agent_name = Column(String, nullable=False)
     
