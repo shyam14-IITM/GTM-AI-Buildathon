@@ -74,31 +74,35 @@ async def update_prospect(
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid stage: {payload.current_status}")
             
-    if payload.notes is not None:
-        prospect.notes = payload.notes
+    try:
+        if payload.notes is not None:
+            prospect.notes = payload.notes
+            
+        if payload.assigned_rep_id is not None:
+            prospect.assigned_rep_id = payload.assigned_rep_id
         
-    if payload.assigned_rep_id is not None:
-        prospect.assigned_rep_id = payload.assigned_rep_id
+        # Create audit log
+        db.add(AgentLog(
+            campaign_id=prospect.campaign_id,
+            prospect_id=prospect.id,
+            agent_name=current_user.name,
+            action="MANUAL_OVERRIDE",
+            status="SUCCESS",
+            prompt_version="manual",
+            details={
+                "old_stage": old_stage, 
+                "new_stage": prospect.stage.value,
+                "notes": payload.notes,
+                "assigned_rep_id": payload.assigned_rep_id
+            }
+        ))
         
-    # Create audit log
-    db.add(AgentLog(
-        campaign_id=prospect.campaign_id,
-        prospect_id=prospect.id,
-        agent_name=current_user.name,
-        action="MANUAL_OVERRIDE",
-        status="SUCCESS",
-        prompt_version="manual",
-        details={
-            "old_stage": old_stage, 
-            "new_stage": prospect.stage.value,
-            "notes": payload.notes,
-            "assigned_rep_id": payload.assigned_rep_id
-        }
-    ))
-    
-    await db.commit()
-    await db.refresh(prospect)
-    return prospect
+        await db.commit()
+        await db.refresh(prospect)
+        return prospect
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database update failed: {str(e)}")
 
 @router.get("/{campaign_id}/funnel", response_model=FunnelMetricsResponse)
 async def get_funnel_metrics(

@@ -107,18 +107,22 @@ async def update_campaign(
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
         
-    if payload.name is not None:
-        campaign.name = payload.name
-    if payload.status is not None:
-        campaign.status = payload.status
-    if payload.config is not None:
-        merged_config = dict(campaign.config)
-        merged_config.update(payload.config)
-        campaign.config = merged_config
-        
-    await db.commit()
-    await db.refresh(campaign)
-    return campaign
+    try:
+        if payload.name is not None:
+            campaign.name = payload.name
+        if payload.status is not None:
+            campaign.status = payload.status
+        if payload.config is not None:
+            merged_config = dict(campaign.config)
+            merged_config.update(payload.config)
+            campaign.config = merged_config
+            
+        await db.commit()
+        await db.refresh(campaign)
+        return campaign
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database update failed: {str(e)}")
 
 @router.get("/{campaign_id}/logs")
 async def get_campaign_logs(

@@ -20,6 +20,7 @@ class ProspectStage(str, enum.Enum):
     RESEARCHED = "Researched"
     QUALIFIED = "Qualified"
     DRAFTED = "Drafted"
+    DRAFT_FAILED = "Draft_Failed"
     DRAFTED_LINKEDIN = "Drafted_Linkedin"
     CONTACTED = "Contacted"
     ENGAGED = "Engaged"

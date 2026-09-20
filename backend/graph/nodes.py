@@ -108,23 +108,28 @@ async def icp_fitment_node(state: AgentState) -> dict[str, Any]:
     )
     structured_llm = llm.with_structured_output(ICPDecision, include_raw=True)
     
-    # Invoke asynchronously
-    response = await structured_llm.ainvoke([system_prompt, user_prompt])
-    decision: ICPDecision = response["parsed"]
-    raw_msg = response["raw"]
-    
-    usage = raw_msg.usage_metadata or {}
-    print(f"LLM Decision: {decision.status} - {decision.reasoning}")
-    
-    # Prepare details payload with meta
-    details = {"status": decision.status, "reasoning": decision.reasoning}
-    if usage:
-        details["meta"] = {
-            "model": "openai/gpt-oss-20b (Groq)",
-            "prompt_tokens": usage.get("input_tokens", 0),
-            "completion_tokens": usage.get("output_tokens", 0),
-            "total_tokens": usage.get("total_tokens", 0)
-        }
+    # Invoke asynchronously with error handling
+    try:
+        response = await structured_llm.ainvoke([system_prompt, user_prompt])
+        decision: ICPDecision = response["parsed"]
+        raw_msg = response["raw"]
+        
+        usage = raw_msg.usage_metadata or {}
+        print(f"LLM Decision: {decision.status} - {decision.reasoning}")
+        
+        # Prepare details payload with meta
+        details = {"status": decision.status, "reasoning": decision.reasoning}
+        if usage:
+            details["meta"] = {
+                "model": "openai/gpt-oss-20b (Groq)",
+                "prompt_tokens": usage.get("input_tokens", 0),
+                "completion_tokens": usage.get("output_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0)
+            }
+    except Exception as e:
+        print(f"--- [Node: ICP Fitment] Error: {str(e)}")
+        decision = ICPDecision(status="Rejected", reasoning=f"Error parsing LLM output: {str(e)}")
+        details = {"status": decision.status, "reasoning": decision.reasoning, "error": str(e)}
     
     # Update the Database using SQLAlchemy
     async with AsyncSessionLocal() as db:
@@ -198,8 +203,13 @@ async def strategy_node(state: AgentState) -> dict[str, Any]:
     )
     structured_llm = llm.with_structured_output(StrategyDecision)
     
-    decision: StrategyDecision = await structured_llm.ainvoke([system_prompt, user_prompt])
-    print(f"Strategy Decision: Route to {decision.channel} - {decision.reasoning}")
+    try:
+        decision: StrategyDecision = await structured_llm.ainvoke([system_prompt, user_prompt])
+        print(f"Strategy Decision: Route to {decision.channel} - {decision.reasoning}")
+    except Exception as e:
+        print(f"--- [Node: Strategy] Error: {str(e)}")
+        fallback_channel = enabled_channels[0] if enabled_channels else "email"
+        decision = StrategyDecision(channel=fallback_channel, reasoning=f"Error parsing LLM output: {str(e)}")
     
     # Write to AgentLog
     async with AsyncSessionLocal() as db:
@@ -273,23 +283,43 @@ async def email_drafter_node(state: AgentState) -> dict[str, Any]:
     )
     structured_llm = llm.with_structured_output(EmailDraftResponse, include_raw=True)
     
-    response = await structured_llm.ainvoke([system_prompt, user_prompt])
-    draft: EmailDraftResponse = response["parsed"]
-    raw_msg = response["raw"]
-    
-    usage = raw_msg.usage_metadata or {}
-    
-    final_email_text = f"Subject: {draft.subject}\n\n{draft.body}"
-    print(f"Drafted Email:\n{final_email_text}")
-    
-    details = {"subject": draft.subject, "body_preview": draft.body[:100] + "..."}
-    if usage:
-        details["meta"] = {
-            "model": "openai/gpt-oss-20b (Groq)",
-            "prompt_tokens": usage.get("input_tokens", 0),
-            "completion_tokens": usage.get("output_tokens", 0),
-            "total_tokens": usage.get("total_tokens", 0)
-        }
+    try:
+        response = await structured_llm.ainvoke([system_prompt, user_prompt])
+        draft: EmailDraftResponse = response["parsed"]
+        raw_msg = response["raw"]
+        
+        usage = raw_msg.usage_metadata or {}
+        
+        final_email_text = f"Subject: {draft.subject}\n\n{draft.body}"
+        print(f"Drafted Email:\n{final_email_text}")
+        
+        details = {"subject": draft.subject, "body_preview": draft.body[:100] + "..."}
+        if usage:
+            details["meta"] = {
+                "model": "openai/gpt-oss-20b (Groq)",
+                "prompt_tokens": usage.get("input_tokens", 0),
+                "completion_tokens": usage.get("output_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0)
+            }
+    except Exception as e:
+        print(f"--- [Node: Email Drafter] Error: {str(e)}")
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Prospect).where(Prospect.id == prospect_id))
+            prospect = result.scalars().first()
+            if prospect:
+                prospect.stage = ProspectStage.DRAFT_FAILED
+                prospect.escalated_to_rep = True
+                db.add(AgentLog(
+                    campaign_id=campaign_id,
+                    prospect_id=prospect_id,
+                    agent_name="Email Personalization Node",
+                    action="DRAFT_FAILED",
+                    status="ERROR",
+                    prompt_version="v1.0",
+                    details={"error": str(e)}
+                ))
+                await db.commit()
+        return {"current_status": "Draft_Failed", "messages": [SystemMessage(content=f"Email drafting failed: {str(e)}")]}
     
     # Update the Database
     async with AsyncSessionLocal() as db:
@@ -347,10 +377,29 @@ async def linkedin_drafter_node(state: AgentState) -> dict[str, Any]:
     )
     structured_llm = llm.with_structured_output(LinkedinDraftResponse)
     
-    draft: LinkedinDraftResponse = await structured_llm.ainvoke([system_prompt, user_prompt])
-    
-    final_msg = draft.message
-    print(f"Drafted LinkedIn:\n{final_msg}")
+    try:
+        draft: LinkedinDraftResponse = await structured_llm.ainvoke([system_prompt, user_prompt])
+        final_msg = draft.message
+        print(f"Drafted LinkedIn:\n{final_msg}")
+    except Exception as e:
+        print(f"--- [Node: LinkedIn Drafter] Error: {str(e)}")
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Prospect).where(Prospect.id == prospect_id))
+            prospect = result.scalars().first()
+            if prospect:
+                prospect.stage = ProspectStage.DRAFT_FAILED
+                prospect.escalated_to_rep = True
+                db.add(AgentLog(
+                    campaign_id=campaign_id,
+                    prospect_id=prospect_id,
+                    agent_name="LinkedIn Personalization Node",
+                    action="DRAFT_FAILED",
+                    status="ERROR",
+                    prompt_version="v1.0",
+                    details={"error": str(e)}
+                ))
+                await db.commit()
+        return {"current_status": "Draft_Failed", "messages": [SystemMessage(content=f"LinkedIn drafting failed: {str(e)}")]}
     
     # Update Database
     async with AsyncSessionLocal() as db:
