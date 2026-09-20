@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 from uuid import UUID
 from models import CampaignStatus, ProspectStage
@@ -36,6 +36,8 @@ class ProspectResponse(BaseModel):
     is_active_target: bool
     draft_email: Optional[str] = None
     draft_linkedin_msg: Optional[str] = None
+    escalated_to_rep: bool = False
+    conversation_history: List[Dict[str, Any]] = []
     created_at: datetime
     updated_at: datetime
     
@@ -67,5 +69,28 @@ class AgentLogResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class KnowledgeUpload(BaseModel):
-    title: str
+    title: Optional[str] = None
     content: str
+    category: Optional[str] = None
+    topic: Optional[str] = None
+    id: Optional[str] = None
+
+class WebhookReply(BaseModel):
+    prospect_id: UUID
+    channel: str = "email"
+    message_body: str
+
+class PromptVersionCreate(BaseModel):
+    agent_type: str
+    prompt_text: str
+
+class PromptVersionResponse(BaseModel):
+    id: UUID
+    campaign_id: UUID
+    agent_type: str
+    version_number: int
+    prompt_text: str
+    is_active: bool
+    created_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)

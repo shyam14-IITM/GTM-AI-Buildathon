@@ -2,11 +2,8 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import (
-    Column, Integer, String, Boolean, ForeignKey, 
-    DateTime, Enum, Index, text
-)
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import Column, String, ForeignKey, DateTime, Enum, Integer, Float, Boolean, JSON, text, Index
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 
@@ -74,8 +71,9 @@ class Campaign(Base):
     # Relationships
     user = relationship("User", back_populates="campaigns")
     prospects = relationship("Prospect", back_populates="campaign", cascade="all, delete-orphan")
-    agent_logs = relationship("AgentLog", back_populates="campaign", cascade="all, delete-orphan")
+    knowledge_docs = relationship("KnowledgeDocument", back_populates="campaign", cascade="all, delete-orphan")
     prompt_versions = relationship("PromptVersion", back_populates="campaign", cascade="all, delete-orphan")
+    agent_logs = relationship("AgentLog", back_populates="campaign", cascade="all, delete-orphan")
     knowledge_documents = relationship("KnowledgeDocument", back_populates="campaign", cascade="all, delete-orphan")
 
     __table_args__ = (
@@ -106,6 +104,10 @@ class Prospect(Base):
     # Store the generated draft outreach message
     draft_email = Column(String, nullable=True)
     draft_linkedin_msg = Column(String, nullable=True)
+    
+    # Store conversation and escalation data
+    escalated_to_rep = Column(Boolean, default=False)
+    conversation_history = Column(JSON, default=list)
     
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)

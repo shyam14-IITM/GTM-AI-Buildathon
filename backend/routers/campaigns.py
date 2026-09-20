@@ -1,12 +1,13 @@
-import uuid
-from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from typing import List, Union
+import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import func, update
 
 from database import get_db, AsyncSessionLocal
-from models import Campaign, CampaignStatus, User, Prospect, ProspectStage, AgentLog, KnowledgeDocument
-from schemas import CampaignCreate, CampaignUpdate, CampaignResponse, AgentLogResponse, FunnelMetricsResponse, KnowledgeUpload
+from models import Campaign, CampaignStatus, User, Prospect, ProspectStage, AgentLog, KnowledgeDocument, PromptVersion
+from schemas import CampaignCreate, CampaignUpdate, CampaignResponse, AgentLogResponse, FunnelMetricsResponse, KnowledgeUpload, WebhookReply, PromptVersionCreate, PromptVersionResponse
 from auth import get_current_user
 from graph.workflow import compiled_workflow
 from sqlalchemy import func
@@ -164,7 +165,7 @@ async def get_campaign_metrics(
 @router.post("/{campaign_id}/knowledge", status_code=status.HTTP_201_CREATED)
 async def seed_knowledge(
     campaign_id: uuid.UUID,
-    upload: KnowledgeUpload,
+    payload: Union[KnowledgeUpload, List[KnowledgeUpload]],
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -174,28 +175,30 @@ async def seed_knowledge(
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
         
-    # Split text
+    uploads = payload if isinstance(payload, list) else [payload]
+    
+    total_chunks = 0
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    chunks = splitter.split_text(upload.content)
     
-    if not chunks:
-        return {"message": "No content to embed"}
+    for upload in uploads:
+        chunks = splitter.split_text(upload.content)
+        if not chunks:
+            continue
+            
+        vectors = embeddings.embed_documents(chunks)
         
-    # Embed chunks
-    vectors = embeddings.embed_documents(chunks)
-    
-    # Save to db
-    for chunk, vector in zip(chunks, vectors):
-        doc = KnowledgeDocument(
-            campaign_id=campaign_id,
-            title=upload.title,
-            content=chunk,
-            embedding=vector
-        )
-        db.add(doc)
-        
+        for chunk, vector in zip(chunks, vectors):
+            doc = KnowledgeDocument(
+                campaign_id=campaign_id,
+                title=upload.title or upload.topic or "Knowledge Context",
+                content=chunk,
+                embedding=vector
+            )
+            db.add(doc)
+            total_chunks += 1
+            
     await db.commit()
-    return {"message": f"Successfully embedded {len(chunks)} knowledge chunks"}
+    return {"message": f"Successfully embedded {total_chunks} knowledge chunks"}
 
 @router.post("/{campaign_id}/seed")
 async def seed_campaign_prospects(
@@ -348,4 +351,105 @@ async def execute_campaign(
     queued_count = result.scalar()
     
     return {"message": "Execution started in the background", "campaign_id": campaign_id, "queued": queued_count}
+
+@router.post("/webhook/reply", status_code=status.HTTP_200_OK)
+async def process_inbound_reply(
+    payload: WebhookReply,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Webhook endpoint to simulate inbound email, SMS or LinkedIn replies.
+    This triggers the Conversation Agent asynchronously to parse the reply and respond.
+    """
+    # Verify the prospect exists
+    result = await db.execute(select(Prospect).where(Prospect.id == payload.prospect_id))
+    prospect = result.scalars().first()
+    
+    if not prospect:
+        raise HTTPException(status_code=404, detail="Prospect not found")
+        
+    campaign_id = prospect.campaign_id
+    
+    # Normally we'd run this asynchronously to not block the webhook provider,
+    # but for the demo we'll run it synchronously or just queue it to run.
+    from graph.nodes import conversation_node
+    from graph.state import AgentState
+    from langchain_core.messages import HumanMessage
+    
+    async def run_conversation_agent():
+        print(f"--- [Webhook] Triggering Conversation Node for Prospect {prospect.id} ---")
+        state = AgentState(
+            prospect_id=prospect.id,
+            campaign_id=campaign_id,
+            icp_criteria={},
+            structured_prospect_data={},
+            current_status="Inbound_Reply",
+            selected_channel=payload.channel,
+            messages=[HumanMessage(content=payload.message_body)]
+        )
+        try:
+            await conversation_node(state)
+        except Exception as e:
+            print(f"FAILED Conversation Node: {str(e)}")
+            
+    background_tasks.add_task(run_conversation_agent)
+    
+    return {"message": "Inbound reply queued for processing by Conversation Agent."}
+
+@router.post("/{campaign_id}/prompts", response_model=PromptVersionResponse, status_code=status.HTTP_201_CREATED)
+async def create_prompt_version(
+    campaign_id: uuid.UUID,
+    payload: PromptVersionCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Saves a new system prompt for a specific agent type and makes it active."""
+    result = await db.execute(select(Campaign).where(Campaign.id == campaign_id, Campaign.user_id == current_user.id))
+    if not result.scalars().first():
+        raise HTTPException(status_code=404, detail="Campaign not found")
+        
+    # Deactivate all previous prompts for this agent_type
+    await db.execute(
+        update(PromptVersion)
+        .where(PromptVersion.campaign_id == campaign_id, PromptVersion.agent_type == payload.agent_type)
+        .values(is_active=False)
+    )
+    
+    # Get highest version number
+    result = await db.execute(
+        select(func.max(PromptVersion.version_number))
+        .where(PromptVersion.campaign_id == campaign_id, PromptVersion.agent_type == payload.agent_type)
+    )
+    max_version = result.scalar() or 0
+    
+    new_prompt = PromptVersion(
+        campaign_id=campaign_id,
+        agent_type=payload.agent_type,
+        version_number=max_version + 1,
+        prompt_text=payload.prompt_text,
+        is_active=True
+    )
+    db.add(new_prompt)
+    await db.commit()
+    await db.refresh(new_prompt)
+    
+    return new_prompt
+
+@router.get("/{campaign_id}/prompts", response_model=List[PromptVersionResponse])
+async def list_active_prompts(
+    campaign_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Lists the currently active prompts for all agent types in the campaign."""
+    result = await db.execute(select(Campaign).where(Campaign.id == campaign_id, Campaign.user_id == current_user.id))
+    if not result.scalars().first():
+        raise HTTPException(status_code=404, detail="Campaign not found")
+        
+    result = await db.execute(
+        select(PromptVersion)
+        .where(PromptVersion.campaign_id == campaign_id, PromptVersion.is_active == True)
+    )
+    return result.scalars().all()
 
