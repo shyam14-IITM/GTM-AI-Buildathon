@@ -93,41 +93,78 @@ async def update_campaign(
     await db.refresh(campaign)
     return campaign
 
-@router.get("/{campaign_id}/logs", response_model=List[AgentLogResponse])
+from fastapi import Query
+
+@router.put("/{campaign_id}", response_model=CampaignResponse)
+async def update_campaign(
+    campaign_id: uuid.UUID,
+    payload: CampaignUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    result = await db.execute(select(Campaign).where(Campaign.id == campaign_id, Campaign.user_id == current_user.id))
+    campaign = result.scalars().first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+        
+    if payload.name is not None:
+        campaign.name = payload.name
+    if payload.status is not None:
+        campaign.status = payload.status
+    if payload.config is not None:
+        merged_config = dict(campaign.config)
+        merged_config.update(payload.config)
+        campaign.config = merged_config
+        
+    await db.commit()
+    await db.refresh(campaign)
+    return campaign
+
+@router.get("/{campaign_id}/logs")
 async def get_campaign_logs(
     campaign_id: uuid.UUID,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Fetch chronological AgentLog entries for a campaign. 
-    Designed for easy binding in DronaHQ list/table components.
+    Fetch chronological AgentLog entries for a campaign with pagination. 
     """
-    # Verify access
-    result = await db.execute(
-        select(Campaign).where(Campaign.id == campaign_id, Campaign.user_id == current_user.id)
-    )
+    result = await db.execute(select(Campaign).where(Campaign.id == campaign_id, Campaign.user_id == current_user.id))
     if not result.scalars().first():
         raise HTTPException(status_code=404, detail="Campaign not found")
         
+    total_result = await db.execute(select(func.count(AgentLog.id)).where(AgentLog.campaign_id == campaign_id))
+    total_count = total_result.scalar()
+    
     result = await db.execute(
-        select(AgentLog).where(AgentLog.campaign_id == campaign_id).order_by(AgentLog.created_at.desc())
+        select(AgentLog)
+        .where(AgentLog.campaign_id == campaign_id)
+        .order_by(AgentLog.created_at.desc())
+        .offset(skip)
+        .limit(limit)
     )
     logs = result.scalars().all()
     
-    return [
-        {
-            "id": log.id,
-            "campaign_id": log.campaign_id,
-            "prospect_id": log.prospect_id,
-            "agent_name": log.agent_name,
-            "action": log.action,
-            "status": log.status,
-            "prompt_version": log.prompt_version,
-            "details": log.details,
-            "created_at": log.created_at
-        } for log in logs
-    ]
+    return {
+        "total": total_count,
+        "skip": skip,
+        "limit": limit,
+        "data": [
+            {
+                "id": log.id,
+                "campaign_id": log.campaign_id,
+                "prospect_id": log.prospect_id,
+                "agent_name": log.agent_name,
+                "action": log.action,
+                "status": log.status,
+                "prompt_version": log.prompt_version,
+                "details": log.details,
+                "created_at": log.created_at
+            } for log in logs
+        ]
+    }
 
 @router.get("/{campaign_id}/metrics", response_model=FunnelMetricsResponse)
 async def get_campaign_metrics(

@@ -43,6 +43,11 @@ class ProspectResponse(BaseModel):
     
     model_config = ConfigDict(from_attributes=True)
 
+class ProspectUpdate(BaseModel):
+    current_status: Optional[str] = None
+    notes: Optional[str] = None
+    assigned_rep_id: Optional[str] = None
+
 class FunnelMetricsResponse(BaseModel):
     discovered: int = 0
     researched: int = 0

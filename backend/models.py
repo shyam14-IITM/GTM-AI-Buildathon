@@ -109,6 +109,10 @@ class Prospect(Base):
     escalated_to_rep = Column(Boolean, default=False)
     conversation_history = Column(JSON, default=list)
     
+    # Human intervention fields
+    notes = Column(String, nullable=True)
+    assigned_rep_id = Column(String, nullable=True)
+    
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 

@@ -16,11 +16,36 @@ from auth import (
 )
 from routers import campaigns, prospects
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(title="SDR Buildathon API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- Application Routing ---
 app.include_router(campaigns.router, prefix="/api")
 app.include_router(prospects.router, prefix="/api")
+
+@app.get("/api/reps", tags=["system"])
+async def get_available_reps():
+    """
+    Hybrid approach: Returns a hardcoded list of Sales Reps for DronaHQ dropdown binding.
+    """
+    return [
+        {"id": "rep_1", "name": "Alex Miller", "email": "alex@company.com"},
+        {"id": "rep_2", "name": "Priya Sharma", "email": "priya@company.com"},
+        {"id": "rep_3", "name": "Devin Reed", "email": "devin@company.com"}
+    ]
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "version": "1.0.0"}
 
 # --- Pydantic Schemas ---
 class UserCreate(BaseModel):

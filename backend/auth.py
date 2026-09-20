@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 import jwt
 import bcrypt
@@ -15,7 +16,9 @@ SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-buildathon-key")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 1 week
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+STATIC_API_KEY = os.getenv("DRONAHQ_API_KEY", "buildathon-secret-drona-key-2026")
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login", auto_error=False)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     # bcrypt requires bytes
@@ -39,12 +42,35 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)):
+from fastapi import Header
+from typing import Optional
+
+async def get_current_user(
+    token: Optional[str] = Depends(oauth2_scheme), 
+    x_api_key: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db)
+):
+    # 1. Check for DronaHQ API Key Bypass
+    if x_api_key == STATIC_API_KEY:
+        # Return a mock superuser payload for DronaHQ actions
+        mock_admin = User(
+            id=uuid.UUID('00000000-0000-0000-0000-000000000000'), 
+            email="admin@dronahq.internal", 
+            name="DronaHQ Admin", 
+            is_active=True
+        )
+        return mock_admin
+
+    # 2. Fall back to standard JWT extraction
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    
+    if not token:
+        raise credentials_exception
+        
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
