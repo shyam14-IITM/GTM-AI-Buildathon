@@ -2,6 +2,9 @@ import axios from 'axios';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
+  headers: {
+    'ngrok-skip-browser-warning': '69420'
+  }
 });
 
 // No auth needed — backend bypasses JWT for demo
@@ -36,7 +39,10 @@ export const authService = {
     formData.append('username', email);
     formData.append('password', password);
     return api.post('/login', formData, {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      headers: { 
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'ngrok-skip-browser-warning': '69420'
+      }
     }).then(res => res.data);
   },
   getMe: () => api.get('/users/me').then(res => res.data)
