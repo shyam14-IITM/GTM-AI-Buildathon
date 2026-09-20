@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,9 +21,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="SDR Buildathon API")
 
+raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173")
+allow_origins = [origin.strip() for origin in raw_origins.split(",")]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

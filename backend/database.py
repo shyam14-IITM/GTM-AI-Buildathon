@@ -8,10 +8,9 @@ load_dotenv()
 
 # Use environment variable for the database URL, with a fallback for local development.
 # Example: postgresql+asyncpg://user:password@localhost/dbname
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/buildathon"
-)
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is missing")
 
 # Create the async engine
 # pool_size and max_overflow can be tuned based on the concurrency requirements.

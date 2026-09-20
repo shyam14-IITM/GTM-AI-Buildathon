@@ -1,3 +1,4 @@
+import os
 from typing import Any, Literal
 from pydantic import BaseModel
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -8,6 +9,14 @@ from sqlalchemy.future import select
 from .state import AgentState
 from database import AsyncSessionLocal
 from models import Prospect, ProspectStage, AgentLog, KnowledgeDocument, Campaign, PromptVersion
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    raise ValueError("GROQ_API_KEY environment variable is missing")
+
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+if not RESEND_API_KEY:
+    raise ValueError("RESEND_API_KEY environment variable is missing")
 
 # Initialize global embeddings for nodes
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
@@ -100,9 +109,8 @@ async def icp_fitment_node(state: AgentState) -> dict[str, Any]:
     import os
     
     # Instantiate Groq (OpenAI compatible) and bind structured output
-    llm = ChatOpenAI(
-        model="openai/gpt-oss-20b",
-        api_key=os.getenv("GROQ_API_KEY", "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"),
+    llm = ChatOpenAI(model="openai/gpt-oss-20b",
+        api_key=GROQ_API_KEY,
         base_url="https://api.groq.com/openai/v1",
         temperature=0
     )
@@ -195,9 +203,8 @@ async def strategy_node(state: AgentState) -> dict[str, Any]:
     """)
     
     import os
-    llm = ChatOpenAI(
-        model="openai/gpt-oss-20b",
-        api_key=os.getenv("GROQ_API_KEY", "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"),
+    llm = ChatOpenAI(model="openai/gpt-oss-20b",
+        api_key=GROQ_API_KEY,
         base_url="https://api.groq.com/openai/v1",
         temperature=0.1
     )
@@ -275,9 +282,8 @@ async def email_drafter_node(state: AgentState) -> dict[str, Any]:
     
     import os
     
-    llm = ChatOpenAI(
-        model="openai/gpt-oss-20b",
-        api_key=os.getenv("GROQ_API_KEY", "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"),
+    llm = ChatOpenAI(model="openai/gpt-oss-20b",
+        api_key=GROQ_API_KEY,
         base_url="https://api.groq.com/openai/v1",
         temperature=0.4
     )
@@ -369,9 +375,8 @@ async def linkedin_drafter_node(state: AgentState) -> dict[str, Any]:
     """)
     
     import os
-    llm = ChatOpenAI(
-        model="openai/gpt-oss-20b",
-        api_key=os.getenv("GROQ_API_KEY", "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"),
+    llm = ChatOpenAI(model="openai/gpt-oss-20b",
+        api_key=GROQ_API_KEY,
         base_url="https://api.groq.com/openai/v1",
         temperature=0.4
     )
@@ -438,7 +443,7 @@ async def email_sender_node(state: AgentState) -> dict[str, Any]:
     campaign_id = state.get("campaign_id")
     
     # Use a dummy API key for hackathon purposes if not provided
-    resend.api_key = os.getenv("RESEND_API_KEY", "re_dummy123456789")
+    resend.api_key = RESEND_API_KEY
     
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Prospect).where(Prospect.id == prospect_id))
@@ -454,17 +459,19 @@ async def email_sender_node(state: AgentState) -> dict[str, Any]:
         to_email = os.getenv("DEMO_EMAIL_OVERRIDE", prospect.email or "test@example.com")
         
         try:
-            # Uncomment below to actually send with a real API key
-            # params = {
-            #     "from": "onboarding@resend.dev",
-            #     "to": [to_email],
-            #     "subject": subject,
-            #     "html": f"<p>{body.replace(chr(10), '<br>')}</p>"
-            # }
-            # resend.Emails.send(params)
-            
-            import asyncio
-            await asyncio.sleep(1) # Simulate network call
+            # Actually send with a real API key
+            if RESEND_API_KEY.startswith("re_dummy"):
+                print("WARNING: Using dummy Resend key. Skipping actual email dispatch.")
+                import asyncio
+                await asyncio.sleep(1) # Simulate network call
+            else:
+                params = {
+                    "from": "onboarding@resend.dev",
+                    "to": [to_email],
+                    "subject": subject,
+                    "html": f"<p>{body.replace(chr(10), '<br>')}</p>"
+                }
+                resend.Emails.send(params)
             
             prospect.stage = ProspectStage.CONTACTED
             db.add(AgentLog(
@@ -525,9 +532,8 @@ async def conversation_node(state: AgentState) -> dict[str, Any]:
     """)
     
     import os
-    llm = ChatOpenAI(
-        model="openai/gpt-oss-20b",
-        api_key=os.getenv("GROQ_API_KEY", "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"),
+    llm = ChatOpenAI(model="openai/gpt-oss-20b",
+        api_key=GROQ_API_KEY,
         base_url="https://api.groq.com/openai/v1",
         temperature=0.1
     )
@@ -601,9 +607,8 @@ async def voice_node(state: AgentState) -> dict[str, Any]:
     user_prompt = HumanMessage(content=f"Prospect Profile: {structured_data}\nKnowledge Base: {knowledge_context}")
     
     import os
-    llm = ChatOpenAI(
-        model="openai/gpt-oss-20b",
-        api_key=os.getenv("GROQ_API_KEY", "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"),
+    llm = ChatOpenAI(model="openai/gpt-oss-20b",
+        api_key=GROQ_API_KEY,
         base_url="https://api.groq.com/openai/v1",
         temperature=0.6
     )
@@ -651,9 +656,8 @@ async def follow_up_node(state: AgentState) -> dict[str, Any]:
     user_prompt = HumanMessage(content=f"Prospect Profile: {structured_data}\nDraft a polite bump.")
     
     import os
-    llm = ChatOpenAI(
-        model="openai/gpt-oss-20b",
-        api_key=os.getenv("GROQ_API_KEY", "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"),
+    llm = ChatOpenAI(model="openai/gpt-oss-20b",
+        api_key=GROQ_API_KEY,
         base_url="https://api.groq.com/openai/v1",
         temperature=0.4
     )
