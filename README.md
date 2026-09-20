@@ -1,50 +1,63 @@
-# GTM AI Buildathon: Autonomous SDR Backend
+# GTM AI Buildathon: Autonomous SDR Platform
 
-This repository contains the backend architecture for an Autonomous Sales Development Representative (SDR) platform. It is designed to integrate with a low-code frontend (DronaHQ) to automate prospect research, ICP fitment evaluation, and outreach generation.
+This repository contains a full-stack application for an Autonomous Sales Development Representative (SDR) platform. It automates prospect discovery, ICP fitment evaluation, and personalized outreach generation.
 
 ## 🏗️ Architecture
 
-The system is built on a highly concurrent, async-first Python stack:
+The system is built as a modern, decoupled full-stack application:
 
+### Backend (`/backend`)
 - **Framework**: [FastAPI](https://fastapi.tiangolo.com/) for high-performance, non-blocking REST endpoints.
 - **AI Orchestration**: [LangGraph](https://python.langchain.com/docs/langgraph) & LangChain for stateful agent workflows.
-- **LLM Engine**: Google Gemini 1.5 Flash (`ChatGoogleGenerativeAI`) utilizing strict Pydantic structured outputs to prevent hallucinated data.
+- **LLM Engine**: Groq for ultra-fast inference and reasoning.
+- **Embeddings/RAG**: Local `HuggingFaceEmbeddings` (`all-MiniLM-L6-v2`) combined with `pgvector` for instant, cost-free knowledge retrieval.
+- **Lead Discovery**: Integrated with Apollo.io to autonomously discover leads based on dynamic campaign criteria.
 - **Database**: PostgreSQL (via Supabase) with `pgvector`.
 - **ORM**: SQLAlchemy (`AsyncSession`) for asynchronous database operations.
-- **Authentication**: Custom JWT + bcrypt implementation ensuring strict multi-tenant isolation (Campaigns are locked to the authenticated human `User`).
+- **Authentication**: Custom JWT + bcrypt implementation ensuring strict multi-tenant isolation.
 
-### Core AI Pipeline (`backend/graph`)
-The LangGraph workflow orchestrates multiple agents:
-1. **Research Node**: Extracts prospect identifiers and structures realistic firmographic data (Name, Title, Company Size, Industry).
-2. **ICP Fitment Node**: Evaluates the prospect's data against the Campaign's dynamic `icp_criteria` (JSONB) to output a strict `Qualified` or `Rejected` decision.
-
-### Async Execution (`backend/routers/campaigns.py`)
-To prevent frontend timeouts in DronaHQ, the LangGraph pipeline is triggered via a `POST /api/campaigns/{id}/execute` endpoint. This returns a `202 Accepted` response instantly, while FastAPI `BackgroundTasks` execute the LLM reasoning and persist the funnel stage changes to Postgres asynchronously.
+### Frontend (`/frontend`)
+- **Framework**: React 19 + Vite for a blazing fast Single Page Application (SPA) experience.
+- **Routing**: React Router DOM.
+- **Styling**: Tailwind CSS 4 for utility-first, modern UI design.
+- **Icons**: Lucide React.
+- **API Client**: Axios configured with environment-based routing.
 
 ---
 
-## ⚙️ Environment Variables
+## ⚙️ Environment Configuration
 
-Create a `.env` file in the `backend/` directory with the following keys:
-
+### Backend (`backend/.env`)
+Create a `.env` file in the `backend/` directory:
 ```env
-# Database (Supabase or Local Postgres)
-# e.g., postgresql+asyncpg://postgres:postgres@localhost:5432/buildathon
-DATABASE_URL=your_postgres_connection_string
+# Database Connection (Direct Connection for asyncpg)
+DATABASE_URL=postgresql+asyncpg://postgres:your_password@your_host:5432/postgres
 
-# Authentication
+# Security
 SECRET_KEY=your_secure_random_jwt_string
+DRONAHQ_API_KEY=your_secure_api_key
 
-# AI / LLM Provider
-GOOGLE_API_KEY=your_gemini_api_key
+# Third Party APIs
+GROQ_API_KEY=gsk_your_key_here
+RESEND_API_KEY=re_your_key_here
+GOOGLE_API_KEY=your_google_key_here
+
+# Frontend CORS
+ALLOWED_ORIGINS=http://localhost:5173,https://your-production-url.com
+```
+
+### Frontend (`frontend/.env`)
+Create a `.env` file in the `frontend/` directory:
+```env
+VITE_API_BASE_URL=http://localhost:8000
 ```
 
 ---
 
 ## 🚀 Setup & Installation
 
-**1. Create a Python Virtual Environment**
-Ensure you are using Python 3.12+ (which provides native binary wheels to avoid Rust compilation issues).
+### 1. Backend Setup
+**Create a Python Virtual Environment (Python 3.10+)**
 ```bash
 cd backend
 python -m venv venv
@@ -52,35 +65,41 @@ python -m venv venv
 source venv/bin/activate  # Mac/Linux
 ```
 
-**2. Install Dependencies**
+**Install Dependencies**
 ```bash
 pip install -r requirements.txt
 ```
 
-**3. Database Initialization & Seeding**
-We have included automated scripts to scaffold the schema and populate mock data.
+**Database Initialization & Seeding**
+Make sure your `DATABASE_URL` is configured in the `.env` file, then run:
 ```bash
 # Drops all existing tables and rebuilds the clean schema
-python reset_db.py
+python init_db.py
 
-# Seeds an Admin user, mock Campaigns, and Prospects
-python seed.py
+# Seeds an Admin user (admin@company.com / password123)
+python seed_no_campaigns.py 
+# Note: You can optionally use `python seed.py` instead if you want dummy campaigns/prospects too.
 ```
 
-**4. Run the Server**
+**Run the Server**
 ```bash
 uvicorn main:app --reload
 ```
+The API will be available at `http://localhost:8000`. Interactive documentation is available at `http://localhost:8000/docs`.
 
-The API will be available at `http://localhost:8000`. 
-Interactive documentation (Swagger UI) is available at `http://localhost:8000/docs`.
+### 2. Frontend Setup
+Open a new terminal window.
+```bash
+cd frontend
+npm install
+npm run dev
+```
+The frontend will be available at `http://localhost:5173`. You can log in using `admin@company.com` and `password123`.
 
 ---
 
 ## 🧪 Testing the Pipeline
-
-1. Go to `http://localhost:8000/docs`.
-2. Click **Authorize** and log in with the seeded credentials (`admin@company.com` / `password123`).
-3. Use `GET /api/campaigns/` to fetch your mock Campaign IDs.
-4. Hit `POST /api/campaigns/{campaign_id}/execute`.
-5. Hit `GET /api/prospects/{campaign_id}/funnel` to watch the funnel metrics instantly update as the AI evaluates prospects!
+1. Log in to the frontend dashboard.
+2. Create a new Campaign and define your target roles (e.g. "CTO", "VP Engineering").
+3. Click **Discover Leads** to pull real prospects from Apollo into your campaign funnel.
+4. Click **Execute AI Agents** to trigger the LangGraph workflow in the background, which will evaluate the new prospects against your ICP and draft emails.
