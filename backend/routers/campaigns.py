@@ -241,6 +241,30 @@ async def seed_knowledge(
     await db.commit()
     return {"message": f"Successfully embedded {total_chunks} knowledge chunks"}
 
+@router.get("/{campaign_id}/knowledge")
+async def get_knowledge(
+    campaign_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Fetch all unique knowledge base documents uploaded to a campaign."""
+    # Since docs are chunked, we can group by title or just return distinct titles.
+    # We will return the first chunk's content of each distinct title to give a preview.
+    result = await db.execute(
+        select(KnowledgeDocument.title, KnowledgeDocument.content)
+        .where(KnowledgeDocument.campaign_id == campaign_id)
+        .order_by(KnowledgeDocument.created_at.asc())
+    )
+    docs = result.all()
+    
+    # Deduplicate by title to avoid showing every single chunk
+    unique_docs = {}
+    for title, content in docs:
+        if title not in unique_docs:
+            unique_docs[title] = content
+            
+    return [{"title": k, "preview": v[:150] + "..." if len(v) > 150 else v} for k, v in unique_docs.items()]
+
 @router.post("/{campaign_id}/seed")
 async def seed_campaign_prospects(
     campaign_id: uuid.UUID,
@@ -284,6 +308,64 @@ async def seed_campaign_prospects(
         
     return {"message": f"Successfully seeded {added} new prospects", "campaign_id": campaign_id}
 
+from services.discovery_service import discover_leads
+
+@router.post("/{campaign_id}/discover")
+async def discover_campaign_prospects(
+    campaign_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Query Apollo.io for leads matching the campaign's ICP and insert them.
+    """
+    result = await db.execute(
+        select(Campaign).where(Campaign.id == campaign_id, Campaign.user_id == current_user.id)
+    )
+    campaign = result.scalars().first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+        
+    roles = campaign.targeting_criteria.get("roles", [])
+    if not roles:
+        raise HTTPException(status_code=400, detail="Campaign must have target roles configured to discover leads.")
+        
+    try:
+        # Limit set to 20 for a solid demo batch
+        found_leads = await discover_leads(roles, limit=20)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+        
+    if not found_leads:
+        return {"message": "Apollo returned 0 leads for these criteria.", "discovered_count": 0}
+
+    # Fetch existing emails to prevent duplicates
+    emails = [lead["email"] for lead in found_leads]
+    existing_res = await db.execute(select(Prospect.email).where(Prospect.email.in_(emails)))
+    existing_emails = set(existing_res.scalars().all())
+    
+    added = 0
+    for lead in found_leads:
+        if lead["email"] not in existing_emails:
+            full_name = f"{lead['first_name'] or ''} {lead['last_name'] or ''}".strip()
+            db.add(Prospect(
+                campaign_id=campaign_id,
+                email=lead["email"],
+                linkedin_url=lead["linkedin_url"],
+                stage=ProspectStage.DISCOVERED,
+                enriched_data={
+                    "name": full_name,
+                    "company": lead["company_name"],
+                    "title": lead["headline"]
+                }
+            ))
+            added += 1
+            
+    if added > 0:
+        await db.commit()
+        
+    return {"message": f"Successfully discovered and saved {added} leads via Apollo.", "discovered_count": added}
+
 async def run_campaign_agents_background(campaign_id: uuid.UUID, user_id: uuid.UUID):
     """
     Background worker that runs the LangGraph orchestration.
@@ -299,65 +381,73 @@ async def run_campaign_agents_background(campaign_id: uuid.UUID, user_id: uuid.U
             print("Campaign not found.")
             return
             
-        # Fetch ALL prospects in DISCOVERED stage
+        # Fetch ALL prospects in DISCOVERED stage (IDs only to avoid DetachedInstanceError)
         result = await db.execute(
-            select(Prospect).where(Prospect.campaign_id == campaign_id, Prospect.stage == ProspectStage.DISCOVERED)
+            select(Prospect.id).where(Prospect.campaign_id == campaign_id, Prospect.stage == ProspectStage.DISCOVERED)
         )
-        prospects = result.scalars().all()
+        prospect_ids = result.scalars().all()
         
-        if not prospects:
+        if not prospect_ids:
             print("No DISCOVERED prospects found for this campaign to execute.")
             return
 
-        print(f"--- [Background Task] Found {len(prospects)} prospects to process ---")
+        print(f"--- [Background Task] Found {len(prospect_ids)} prospects to process ---")
         
-        for prospect in prospects:
-            # MID-EXECUTION PAUSE CHECK
-            # We re-fetch the campaign status just in case it was paused during a previous loop
-            status_result = await db.execute(select(Campaign.status).where(Campaign.id == campaign_id))
-            current_status = status_result.scalar()
-            
-            if current_status != CampaignStatus.LIVE:
-                print(f"--- [Background Task] Campaign status is {current_status}. Halting execution. ---")
-                break
+    for pid in prospect_ids:
+        try:
+            # Use a fresh session per prospect to prevent one dead connection from crashing the batch!
+            async with AsyncSessionLocal() as prospect_db:
+                # 1. Fetch fresh prospect
+                prospect = await prospect_db.get(Prospect, pid)
+                if not prospect:
+                    continue
                 
-            print(f"\\n--- [Background Task] Processing prospect {prospect.id} ---")
+                # MID-EXECUTION PAUSE CHECK
+                status_result = await prospect_db.execute(select(Campaign.status).where(Campaign.id == campaign_id))
+                current_status = status_result.scalar()
+                
+                if current_status != CampaignStatus.LIVE:
+                    print(f"--- [Background Task] Campaign status is {current_status}. Halting execution. ---")
+                    break
+                    
+                print(f"\n--- [Background Task] Processing prospect {prospect.id} ---")
+                
+                initial_state = {
+                    "campaign_id": str(campaign_id),
+                    "prospect_id": str(prospect.id),
+                    "icp_criteria": campaign.targeting_criteria,
+                    "campaign_config": campaign.config,
+                    "structured_prospect_data": {},
+                    "current_status": prospect.stage.value,
+                    "messages": []
+                }
+                
+                try:
+                    final_state = await compiled_workflow.ainvoke(initial_state)
+                    print("Final Status:", final_state.get("current_status"))
+                except Exception as e:
+                    print(f"--- [Background Task] Error processing prospect {prospect.id}: {str(e)} ---")
+                    # Update prospect stage so it doesn't get stuck in DISCOVERED limbo
+                    prospect.stage = ProspectStage.REJECTED
+                    prospect_db.add(AgentLog(
+                        campaign_id=campaign_id,
+                        prospect_id=prospect.id,
+                        agent_name="System",
+                        action="WORKFLOW_ERROR",
+                        status="ERROR",
+                        prompt_version="system",
+                        details={"error": str(e)}
+                    ))
+                    await prospect_db.commit()
+                    
+        except Exception as outer_e:
+            print(f"--- [Background Task] CRITICAL loop error on prospect {pid}: {str(outer_e)} ---")
+            pass
             
-            # Pass real data to the graph
-            initial_state = {
-                "campaign_id": str(campaign_id),
-                "prospect_id": str(prospect.id),
-                "icp_criteria": campaign.targeting_criteria,
-                "campaign_config": campaign.config,
-                "structured_prospect_data": {},
-                "current_status": prospect.stage.value,
-                "messages": []
-            }
+        print("--- [Background Task] Sleeping for 8 seconds to respect rate limits... ---")
+        await asyncio.sleep(8)
             
-            try:
-                # Execute the graph asynchronously (ainvoke)
-                final_state = await compiled_workflow.ainvoke(initial_state)
-                print("Final Status:", final_state.get("current_status"))
-            except Exception as e:
-                print(f"--- [Background Task] Error processing prospect {prospect.id}: {str(e)} ---")
-                # Log the error so the UI can show it, and continue to the next prospect!
-                db.add(AgentLog(
-                    campaign_id=campaign_id,
-                    prospect_id=prospect.id,
-                    agent_name="System",
-                    action="WORKFLOW_ERROR",
-                    status="ERROR",
-                    prompt_version="system",
-                    details={"error": str(e)}
-                ))
-                await db.commit()
-            
-            # Rate Limit Protection: Sleep to avoid hitting Gemini Free Tier 20 RPM limits
-            # 8 seconds * 2 LLM calls per prospect = well under 20 requests per minute!
-            print("--- [Background Task] Sleeping for 8 seconds to respect rate limits... ---")
-            await asyncio.sleep(8)
-            
-    print("\\n--- [Background Task] Batch execution finished! ---")
+    print("\n--- [Background Task] Batch execution finished! ---")
 
 
 @router.post("/{campaign_id}/execute", status_code=status.HTTP_202_ACCEPTED)
