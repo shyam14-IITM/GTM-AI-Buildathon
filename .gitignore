@@ -101,3 +101,4 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+!frontend/src/lib/
