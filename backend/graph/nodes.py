@@ -18,8 +18,13 @@ RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 if not RESEND_API_KEY:
     raise ValueError("RESEND_API_KEY environment variable is missing")
 
-# Initialize global embeddings for nodes
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+_embeddings = None
+def get_embeddings():
+    global _embeddings
+    if _embeddings is None:
+        from langchain_huggingface import HuggingFaceEmbeddings
+        _embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    return _embeddings
 
 
 async def get_active_prompt(db, campaign_id, agent_type, default_prompt):
@@ -255,7 +260,7 @@ async def email_drafter_node(state: AgentState) -> dict[str, Any]:
     # RAG Retrieval: Fetch the most relevant knowledge documents
     knowledge_context = "No specific knowledge base available."
     query = f"Industry: {structured_data.get('industry', '')} Role: {structured_data.get('title', '')}"
-    query_vector = embeddings.embed_query(query)
+    query_vector = get_embeddings().embed_query(query)
     
     async with AsyncSessionLocal() as db:
         results = await db.execute(
@@ -509,7 +514,7 @@ async def conversation_node(state: AgentState) -> dict[str, Any]:
     inbound_message = state.get("messages")[-1].content
     
     # If it's an objection, fetch playbook from RAG
-    query_vector = embeddings.embed_query("Objection handling playbook")
+    query_vector = get_embeddings().embed_query("Objection handling playbook")
     rag_context = ""
     async with AsyncSessionLocal() as db:
         results = await db.execute(
@@ -587,7 +592,7 @@ async def voice_node(state: AgentState) -> dict[str, Any]:
     # RAG Retrieval for objections
     knowledge_context = "No specific knowledge base available."
     query = "objection handling competitor budget"
-    query_vector = embeddings.embed_query(query)
+    query_vector = get_embeddings().embed_query(query)
     
     async with AsyncSessionLocal() as db:
         results = await db.execute(

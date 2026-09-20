@@ -12,11 +12,14 @@ from auth import get_current_user
 from graph.workflow import compiled_workflow
 from sqlalchemy import func
 import asyncio
-from langchain_huggingface import HuggingFaceEmbeddings
+_embeddings = None
+def get_embeddings():
+    global _embeddings
+    if _embeddings is None:
+        from langchain_huggingface import HuggingFaceEmbeddings
+        _embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    return _embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-# Initialize local HuggingFace embeddings
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 from sqlalchemy import func
 import asyncio
 
@@ -226,7 +229,7 @@ async def seed_knowledge(
         if not chunks:
             continue
             
-        vectors = embeddings.embed_documents(chunks)
+        vectors = get_embeddings().embed_documents(chunks)
         
         for chunk, vector in zip(chunks, vectors):
             doc = KnowledgeDocument(
