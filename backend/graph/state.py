@@ -14,6 +14,9 @@ class AgentState(TypedDict):
     # Target criteria pulled from the Campaign's JSON config
     icp_criteria: Dict[str, Any]
     
+    # The campaign's full config to determine enabled channels and agents
+    campaign_config: Dict[str, Any]
+    
     # Information gathered and synthesized by the Research node
     structured_prospect_data: Dict[str, Any]
     

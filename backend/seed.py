@@ -32,7 +32,11 @@ async def seed_data():
             name="US SaaS CTO",
             status=CampaignStatus.LIVE,
             config={
-                "channels": ["email", "linkedin"],
+                "is_email_enabled": True,
+                "is_voice_enabled": True,
+                "is_linkedin_enabled": True,
+                "is_follow_up_enabled": True,
+                "is_research_enabled": True,
                 "daily_limit": 50,
                 "assigned_rep": {"name": "Alex Miller", "email": "alex@company.com"}
             },
@@ -51,7 +55,11 @@ async def seed_data():
             name="India BFSI CIO",
             status=CampaignStatus.PAUSED,
             config={
-                "channels": ["email", "voice"],
+                "is_email_enabled": True,
+                "is_voice_enabled": True,
+                "is_linkedin_enabled": False,
+                "is_follow_up_enabled": True,
+                "is_research_enabled": True,
                 "daily_limit": 25,
                 "assigned_rep": {"name": "Priya Sharma", "email": "priya@company.com"}
             },
@@ -70,7 +78,11 @@ async def seed_data():
             name="Voice AI Founders",
             status=CampaignStatus.LIVE,
             config={
-                "channels": ["email", "linkedin"],
+                "is_email_enabled": True,
+                "is_voice_enabled": False,
+                "is_linkedin_enabled": True,
+                "is_follow_up_enabled": False,
+                "is_research_enabled": True,
                 "daily_limit": 40,
                 "assigned_rep": {"name": "Devin Reed", "email": "devin@company.com"}
             },

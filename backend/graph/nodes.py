@@ -152,7 +152,7 @@ async def icp_fitment_node(state: AgentState) -> dict[str, Any]:
     }
 
 class StrategyDecision(BaseModel):
-    channel: Literal['email', 'linkedin']
+    channel: str
     reasoning: str
 
 async def strategy_node(state: AgentState) -> dict[str, Any]:
@@ -174,12 +174,18 @@ async def strategy_node(state: AgentState) -> dict[str, Any]:
         if campaign:
             campaign_config = campaign.config
             
+    enabled_channels = []
+    config = state.get("campaign_config", {})
+    if config.get("is_email_enabled"): enabled_channels.append("email")
+    if config.get("is_linkedin_enabled"): enabled_channels.append("linkedin")
+    if config.get("is_voice_enabled"): enabled_channels.append("voice")
+    
     async with AsyncSessionLocal() as db:
-        raw_sys_prompt = await get_active_prompt(db, campaign_id, "strategy", "You are an Outreach Strategy Agent. Your job is to determine the best channel to contact this prospect.\nYou must output a structured JSON with 'channel' (must be exactly 'email' or 'linkedin') and a brief 'reasoning'.\nReview the Campaign Configuration rules and the Prospect Profile to make your decision.")
+        raw_sys_prompt = await get_active_prompt(db, campaign_id, "strategy", f"You are an Outreach Strategy Agent. Your job is to determine the best channel to contact this prospect.\nYou must output a structured JSON with 'channel' and a brief 'reasoning'.\nYou may ONLY choose from the following enabled channels: {enabled_channels}\nReview the Prospect Profile to make your decision.")
     system_prompt = SystemMessage(content=raw_sys_prompt)
     
     user_prompt = HumanMessage(content=f"""
-    Campaign Configuration: {campaign_config}
+    Enabled Channels: {enabled_channels}
     Prospect Profile: {structured_data}
     """)
     
@@ -511,3 +517,120 @@ async def conversation_node(state: AgentState) -> dict[str, Any]:
             await db.commit()
             
     return {"current_status": classification.intent, "messages": [SystemMessage(content=f"Handled reply: {classification.intent}")]}
+
+class VoiceDraftResponse(BaseModel):
+    call_script: str
+    simulated_disposition: str
+    simulated_duration_seconds: int
+
+async def voice_node(state: AgentState) -> dict[str, Any]:
+    print("--- [Node: Voice SDR] Simulating AI Voice Call ---")
+    prospect_id = state.get("prospect_id")
+    campaign_id = state.get("campaign_id")
+    structured_data = state.get("structured_prospect_data", {})
+    
+    # RAG Retrieval for objections
+    knowledge_context = "No specific knowledge base available."
+    query = "objection handling competitor budget"
+    query_vector = embeddings.embed_query(query)
+    
+    async with AsyncSessionLocal() as db:
+        results = await db.execute(
+            select(KnowledgeDocument)
+            .where(KnowledgeDocument.campaign_id == campaign_id)
+            .order_by(KnowledgeDocument.embedding.cosine_distance(query_vector))
+            .limit(2)
+        )
+        knowledge_docs = results.scalars().all()
+        if knowledge_docs:
+            knowledge_context = "\n\n".join([doc.content for doc in knowledge_docs])
+            
+    async with AsyncSessionLocal() as tmp_db:
+        raw_sys_prompt = await get_active_prompt(tmp_db, campaign_id, "voice_sdr", "You are an elite AI Voice SDR. Draft a conversational call script. Simulate how the call went (disposition) and how long it took. Use the provided knowledge base to handle simulated objections.\nReturn a JSON with 'call_script', 'simulated_disposition', and 'simulated_duration_seconds'.")
+    
+    system_prompt = SystemMessage(content=raw_sys_prompt)
+    user_prompt = HumanMessage(content=f"Prospect Profile: {structured_data}\nKnowledge Base: {knowledge_context}")
+    
+    import os
+    llm = ChatOpenAI(
+        model="openai/gpt-oss-20b",
+        api_key=os.getenv("GROQ_API_KEY", "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"),
+        base_url="https://api.groq.com/openai/v1",
+        temperature=0.6
+    )
+    structured_llm = llm.with_structured_output(VoiceDraftResponse)
+    
+    response: VoiceDraftResponse = await structured_llm.ainvoke([system_prompt, user_prompt])
+    print(f"Voice Call Result: {response.simulated_disposition} ({response.simulated_duration_seconds}s)")
+    
+    # Write to AgentLog (simulated call record)
+    async with AsyncSessionLocal() as db:
+        db.add(AgentLog(
+            campaign_id=campaign_id,
+            prospect_id=prospect_id,
+            agent_name="Voice SDR Node",
+            action="VOICE_CALL_COMPLETED",
+            status="SUCCESS",
+            prompt_version="v1.0",
+            details={"script": response.call_script, "disposition": response.simulated_disposition, "duration": response.simulated_duration_seconds}
+        ))
+        
+        # Update Prospect Stage
+        result = await db.execute(select(Prospect).where(Prospect.id == prospect_id))
+        prospect = result.scalars().first()
+        if prospect:
+            prospect.stage = ProspectStage.CONTACTED
+            
+        await db.commit()
+        
+    return {"current_status": "Contacted", "messages": [SystemMessage(content=f"Voice SDR Call Script: {response.call_script}")]}
+
+class FollowUpResponse(BaseModel):
+    follow_up_message: str
+    channel_used: str
+
+async def follow_up_node(state: AgentState) -> dict[str, Any]:
+    print("--- [Node: Follow-up] Drafting follow-up ping ---")
+    prospect_id = state.get("prospect_id")
+    campaign_id = state.get("campaign_id")
+    structured_data = state.get("structured_prospect_data", {})
+    
+    async with AsyncSessionLocal() as tmp_db:
+        raw_sys_prompt = await get_active_prompt(tmp_db, campaign_id, "follow_up", "You are an elite B2B SDR writing a multi-channel follow-up to a prospect who hasn't replied.\nReturn a JSON with 'follow_up_message' and 'channel_used' (email or linkedin).")
+    
+    system_prompt = SystemMessage(content=raw_sys_prompt)
+    user_prompt = HumanMessage(content=f"Prospect Profile: {structured_data}\nDraft a polite bump.")
+    
+    import os
+    llm = ChatOpenAI(
+        model="openai/gpt-oss-20b",
+        api_key=os.getenv("GROQ_API_KEY", "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"),
+        base_url="https://api.groq.com/openai/v1",
+        temperature=0.4
+    )
+    structured_llm = llm.with_structured_output(FollowUpResponse)
+    
+    response: FollowUpResponse = await structured_llm.ainvoke([system_prompt, user_prompt])
+    print(f"Follow-Up Drafted via {response.channel_used}")
+    
+    # Write to AgentLog
+    async with AsyncSessionLocal() as db:
+        db.add(AgentLog(
+            campaign_id=campaign_id,
+            prospect_id=prospect_id,
+            agent_name="Follow-up Node",
+            action="FOLLOW_UP_SENT",
+            status="SUCCESS",
+            prompt_version="v1.0",
+            details={"message": response.follow_up_message, "channel": response.channel_used}
+        ))
+        
+        # Update Prospect Stage
+        result = await db.execute(select(Prospect).where(Prospect.id == prospect_id))
+        prospect = result.scalars().first()
+        if prospect:
+            prospect.stage = ProspectStage.ENGAGED # Mark as bumped/engaged
+            
+        await db.commit()
+        
+    return {"current_status": "Engaged", "messages": [SystemMessage(content=f"Follow up sent: {response.follow_up_message}")]}

@@ -287,6 +287,7 @@ async def run_campaign_agents_background(campaign_id: uuid.UUID, user_id: uuid.U
                 "campaign_id": str(campaign_id),
                 "prospect_id": str(prospect.id),
                 "icp_criteria": campaign.targeting_criteria,
+                "campaign_config": campaign.config,
                 "structured_prospect_data": {},
                 "current_status": prospect.stage.value,
                 "messages": []
